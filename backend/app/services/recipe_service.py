@@ -1,155 +1,106 @@
+import json
 import logging
 import os
-from pathlib import Path
+import re
 from typing import Any, Dict, List, Optional
 
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+import httpx
 
 from app.schemas.recipe import RecipePreferences, RecipeRequest, RecipeResponse
 from app.services.recipe_parser import parse_recipe_text
 from app.services.recipe_retriever import RecipeRetriever, get_recipe_retriever
+from app.services.recipe_validator import is_core_item_covered_in_text
 
 logger = logging.getLogger(__name__)
 
-# Pretrained Qwen2.5-3B-Instruct model identifiers
-DEFAULT_GGUF_REPO = os.getenv("GENAI_GGUF_REPO", "Qwen/Qwen2.5-3B-Instruct-GGUF")
-DEFAULT_GGUF_FILENAME = os.getenv("GENAI_GGUF_FILE", "qwen2.5-3b-instruct-q4_k_m.gguf")
-DEFAULT_GENAI_MODEL = os.getenv("GENAI_MODEL", "Qwen/Qwen2.5-3B-Instruct")
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
+OLLAMA_MODEL = os.getenv("GENAI_MODEL", "llama3.2")
+
+
+def _normalize_model_json(raw: str) -> str:
+    """Small models often pack all steps/ingredients into one string; split them into list items."""
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return raw
+    if not isinstance(data, dict):
+        return raw
+    steps = data.get("instructions")
+    if isinstance(steps, str):
+        steps = [steps]
+    if isinstance(steps, list) and len(steps) <= 2:
+        text = " ".join(str(x) for x in steps)
+        data["instructions"] = [x.strip() for x in re.split(r"(?<=[.!])\s+(?=[A-Z])", text) if len(x.strip()) > 8]
+    ings = data.get("ingredients")
+    if isinstance(ings, str):
+        ings = [ings]
+    if isinstance(ings, list) and len(ings) == 1:
+        data["ingredients"] = [x.strip() for x in re.split(r",\s*(?=[\d½¼¾]|a |an |some |salt|oil)", str(ings[0])) if x.strip()]
+    if isinstance(data.get("ingredients"), list):
+        cleaned, seen = [], set()
+        for ing in data["ingredients"]:
+            # models echo the prompt's "USE FIRST" tag and sometimes repeat a phrase ("1 tsp oil, 1 tsp oil")
+            t = re.sub(r"[\s,(\[-]*\b(?:priority:?\s*)?use\s*first\b[)\]]?", "", str(ing), flags=re.I).strip(" ,")
+            half = re.fullmatch(r"(.+?),\s*\1", t, flags=re.I)
+            t = half.group(1) if half else t
+            if t and t.lower() not in seen:
+                seen.add(t.lower())
+                cleaned.append(t)
+        data["ingredients"] = cleaned
+    data["shopping_list"] = []  # derived deterministically from final ingredients; models copy junk from references
+    return json.dumps(data)
 
 
 class RecipeService:
     """
-    Local Generative AI service for recipe synthesis.
-    Primary Engine: 4-bit Quantized GGUF via llama-cpp-python for high CPU tokens/sec.
-    Fallback Engine: PyTorch/HuggingFace Transformers with bfloat16 and greedy decoding.
-    Grounded Fallback: SQLite recipe database candidate synthesis.
+    Recipe synthesis via a local Ollama model, grounded on SQLite recipe candidates.
+    Output is checked so every confirmed ingredient is used; one retry, then a
+    database-candidate fallback.
     """
 
-    def __init__(self, model_name: Optional[str] = None, load_weights: Optional[bool] = None):
-        self.model_name = model_name or os.getenv("GENAI_MODEL", DEFAULT_GENAI_MODEL)
-        self.gguf_repo = os.getenv("GENAI_GGUF_REPO", DEFAULT_GGUF_REPO)
-        self.gguf_filename = os.getenv("GENAI_GGUF_FILE", DEFAULT_GGUF_FILENAME)
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-
-        # Engine handles
-        self.llm = None  # llama_cpp.Llama instance
-        self.tokenizer: Optional[AutoTokenizer] = None
-        self.model: Optional[AutoModelForCausalLM] = None
-        self.model_backend: str = "none"
-
+    def __init__(self, model_name: Optional[str] = None, use_llm: bool = True):
+        self.use_llm = use_llm
+        self.model_name = model_name or OLLAMA_MODEL
+        self.device = "ollama"
         self.retriever: RecipeRetriever = get_recipe_retriever()
+        logger.info(f"[RecipeService] Using Ollama model '{self.model_name}' at {OLLAMA_URL}")
 
-        if load_weights is None:
-            self.load_weights = os.getenv("DISHGENIE_LOAD_WEIGHTS", "true").strip().lower() in ("true", "1", "yes")
-        else:
-            self.load_weights = load_weights
-
-        logger.info(
-            f"[RecipeService] Initializing RecipeService (device='{self.device}', load_weights={self.load_weights})"
-        )
-        if self.load_weights:
-            self._load_resources()
-
-    def _load_resources(self) -> None:
-        """
-        Loads the neural generation engine:
-          1. First attempts to load 4-bit GGUF via llama-cpp-python (auto-downloading into backend/models/ if missing).
-          2. If llama-cpp-python is unavailable or fails, falls back to Hugging Face transformers.
-          3. If both fail, falls back to grounded database retrieval synthesis.
-        """
-        # --- 1. Attempt GGUF via llama-cpp-python & huggingface_hub ---
+    def _ollama_up(self) -> bool:
+        if not self.use_llm:
+            return False
         try:
-            models_dir = Path(__file__).resolve().parent.parent.parent / "models"
-            models_dir.mkdir(parents=True, exist_ok=True)
-            local_gguf_path = models_dir / self.gguf_filename
-
-            # Auto-download GGUF if missing from local disk
-            if not local_gguf_path.exists():
-                logger.info(
-                    f"[RecipeService] GGUF model '{self.gguf_filename}' not found locally. "
-                    f"Auto-downloading from '{self.gguf_repo}' into '{models_dir}'..."
-                )
-                try:
-                    from huggingface_hub import hf_hub_download
-
-                    downloaded_file = hf_hub_download(
-                        repo_id=self.gguf_repo,
-                        filename=self.gguf_filename,
-                        local_dir=str(models_dir),
-                    )
-                    local_gguf_path = Path(downloaded_file)
-                    logger.info(f"[RecipeService] Downloaded GGUF model to: {local_gguf_path}")
-                except Exception as dl_err:
-                    logger.warning(f"[RecipeService] Failed to auto-download GGUF weights: {dl_err}")
-                    local_gguf_path = None
-
-            if local_gguf_path and local_gguf_path.exists():
-                from llama_cpp import Llama
-
-                n_threads = max(1, (os.cpu_count() or 4) // 2)
-                logger.info(
-                    f"[RecipeService] Loading Llama GGUF from '{local_gguf_path.name}' "
-                    f"(threads={n_threads}, n_ctx=2048, n_batch=512)..."
-                )
-                self.llm = Llama(
-                    model_path=str(local_gguf_path),
-                    n_ctx=2048,
-                    n_threads=n_threads,
-                    n_batch=512,
-                    verbose=False,
-                )
-                self.model_backend = "llama_cpp"
-                logger.info(f"[RecipeService] Successfully initialized 4-bit GGUF model with llama-cpp-python.")
-                return
-        except Exception as llama_err:
-            logger.warning(f"[RecipeService] llama-cpp-python GGUF initialization skipped/failed: {llama_err}")
-            self.llm = None
-
-        # --- 2. Fallback to Optimized Hugging Face Transformers ---
-        try:
-            logger.info(f"[RecipeService] Initializing Hugging Face Transformers fallback for '{self.model_name}'...")
-            n_threads = max(1, (os.cpu_count() or 4) // 2)
-            torch.set_num_threads(n_threads)
-
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                self.model_name,
-                trust_remote_code=True,
+            r = httpx.get(f"{OLLAMA_URL}/api/tags", timeout=2.0)
+            return r.status_code == 200 and any(
+                m.get("name", "").split(":")[0] == self.model_name.split(":")[0]
+                for m in r.json().get("models", [])
             )
-
-            dtype = torch.float16 if torch.cuda.is_available() else torch.bfloat16
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.model_name,
-                torch_dtype=dtype,
-                trust_remote_code=True,
-                low_cpu_mem_usage=True,
-            )
-            self.model.to(self.device)
-            self.model.eval()
-            self.model_backend = "transformers"
-            logger.info(
-                f"[RecipeService] Successfully loaded Hugging Face model '{self.model_name}' on '{self.device}' with dtype '{dtype}'."
-            )
-        except Exception as hf_err:
-            logger.warning(
-                f"[RecipeService] Hugging Face model '{self.model_name}' not available: {hf_err}. "
-                "Database-backed retrieval synthesis will be used until model weights are downloaded."
-            )
-            self.model = None
-            self.tokenizer = None
-            self.model_backend = "database_fallback"
+        except Exception:
+            return False
 
     @property
     def is_available(self) -> bool:
-        """
-        Recipe service is available if either Llama GGUF is loaded,
-        the Hugging Face Qwen model is loaded, OR the recipe database has indexed recipes.
-        """
-        return (
-            self.llm is not None
-            or (self.model is not None and self.tokenizer is not None)
-            or (self.retriever.db.count_recipes() > 0)
+        """Available if Ollama serves the model OR the recipe DB can ground a fallback."""
+        return self._ollama_up() or self.retriever.db.count_recipes() > 0
+
+    def _chat(self, messages: List[Dict[str, str]]) -> str:
+        r = httpx.post(
+            f"{OLLAMA_URL}/api/chat",
+            json={
+                "model": self.model_name,
+                "messages": messages,
+                "stream": False,
+                "format": "json",
+                "keep_alive": "30m",
+                "options": {
+                    "temperature": 0.3,
+                    "num_ctx": 4096,
+                    "num_predict": int(os.getenv("GENAI_MAX_NEW_TOKENS", "1200")),
+                },
+            },
+            timeout=float(os.getenv("GENAI_TIMEOUT", "300")),
         )
+        r.raise_for_status()
+        return r.json()["message"]["content"].strip()
 
     def get_candidate_options(self, request: RecipeRequest, limit: int = 3) -> List[Dict[str, Any]]:
         """
@@ -164,6 +115,9 @@ class RecipeService:
         options = []
         for cand in candidates:
             name = cand.get("name", "Gourmet Dish")
+            parts = [x.strip() for x in name.split(" - ")]
+            if len(parts) == 2 and parts[0].lower() == parts[1].lower():  # dataset titles like "X - X"
+                name = parts[0]
             cuisine = cand.get("cuisine") or request.preferences.cuisine or "Indian"
             cooking_time = cand.get("cooking_time") or request.preferences.cookingTime or 30
             diet = cand.get("diet") or request.preferences.diet or "Vegetarian"
@@ -208,7 +162,7 @@ class RecipeService:
 
         # Build comprehensive reference block from retrieved database recipes without destructive string slicing
         ref_text = ""
-        for i, cand in enumerate(candidates[:2], 1):
+        for i, cand in enumerate(candidates[:1], 1):
             name = cand.get("name", "Recipe")
             raw_ings = cand.get("ingredients_raw", "").strip()
             steps = cand.get("instructions", "").strip()
@@ -254,7 +208,7 @@ class RecipeService:
             "delicious, and practical recipe tailored to the user's pantry ingredients and culinary constraints.\n"
             "You MUST output your response as a single, valid JSON object with NO markdown code fences (no ```json), "
             "no conversational text, and no commentary before or after.\n\n"
-            "The JSON object must have EXACTLY this structure:\n"
+            "The JSON object must have EXACTLY this structure. 'ingredients' and 'instructions' are JSON arrays with ONE element per ingredient or per step (5-8 steps, never one long string):\n"
             "{\n"
             '  "name": "Recipe Name",\n'
             '  "description": "Appetizing overview of the dish",\n'
@@ -278,9 +232,10 @@ class RecipeService:
             "with realistic cooking times and temperatures. NEVER use headings or section labels as instruction steps.\n"
             f"5. DIETARY COMPLIANCE: The recipe MUST strictly comply with the user's dietary restriction: {preferences.diet}.\n"
             f"6. CUISINE AUTHENTICITY: Maintain culinary techniques authentic to {preferences.cuisine} cuisine.\n"
-            "7. FOCUS: Focus on accurate 'name', 'description', 'ingredients', and 'instructions'. The 'substitutions' and 'shopping_list' "
+            "7. MAIN INGREDIENTS ONLY FROM THE LIST: The recipe name and every main vegetable/protein must come from the confirmed ingredients and additional pantry ingredients. Never introduce another main produce item (e.g. do not add sweet potato if only potato is confirmed). Do not mention side dishes.\n"
+            "8. FOCUS: Focus on accurate 'name', 'description', 'ingredients', and 'instructions'. The 'substitutions' and 'shopping_list' "
             "arrays can be included or empty as they are validated and reconciled deterministically.\n"
-            "8. STOVETOP PREFERENCE & STRICT PAN PREPARATION: For traditional Indian, pan-fried, curry, and stovetop dishes, strictly prohibit oven-baking instructions "
+            "9. STOVETOP PREFERENCE & STRICT PAN PREPARATION: For traditional Indian, pan-fried, curry, and stovetop dishes, strictly prohibit oven-baking instructions "
             "(e.g., 'Preheat oven to 350°F / 180°C', 'Bake on a baking tray'). Prioritize standard Indian stovetop, pan, pressure cooker, or kadhai preparation methods unless "
             "the user's cuisine or recipe explicitly requires baking. Do NOT instruct the user to preheat an oven or bake unless the user has explicitly requested Western baking or a cuisine/dish "
             "that intrinsically requires an oven (such as cakes, bread, or pizza)."
@@ -342,98 +297,54 @@ class RecipeService:
         messages = self.build_prompt_and_messages(
             request.ingredients,
             request.preferences,
-            candidates,
+            candidates if request.selected_dish else [],  # reference only when the user picked a dish
             inventory=request.inventory,
             selected_dish=request.selected_dish,
         )
-        max_tokens = int(os.getenv("GENAI_MAX_NEW_TOKENS", "450"))
+        # 2. Ollama generation: validate that every confirmed ingredient is really used; retry once.
+        def parse(text: str):
+            return parse_recipe_text(
+                text,
+                fallback_ingredients=request.ingredients,
+                cuisine=request.preferences.cuisine,
+                diet=request.preferences.diet,
+                additional_ingredients=request.preferences.additionalIngredients,
+                candidate_recipe=top_cand,
+            )
 
-        # 2a. Primary Engine: Fast llama-cpp-python GGUF Execution
-        if self.llm is not None:
-            try:
-                logger.info(f"[RecipeService] Generating recipe with Llama GGUF (max_tokens={max_tokens}, temperature=0.1)...")
-                response = self.llm.create_chat_completion(
-                    messages=messages,
-                    temperature=0.1,
-                    top_p=0.9,
-                    max_tokens=max_tokens,
-                    response_format={"type": "json_object"},
-                )
-                raw_text = response["choices"][0]["message"]["content"].strip()
-                logger.info(f"[RecipeService] Llama GGUF generated {len(raw_text)} chars")
+        def missing(recipe) -> List[str]:
+            body = " ".join(recipe.instructions).lower()
+            return [
+                ing for ing in request.ingredients
+                if not is_core_item_covered_in_text(ing.replace("_", " ").lower(), body)
+            ]
 
-                recipe = parse_recipe_text(
-                    raw_text,
-                    fallback_ingredients=request.ingredients,
-                    cuisine=request.preferences.cuisine,
-                    diet=request.preferences.diet,
-                    additional_ingredients=request.preferences.additionalIngredients,
-                    candidate_recipe=top_cand,
-                )
-
+        last_ok = None
+        if self._ollama_up():
+            for attempt in range(2):
+                try:
+                    raw_text = _normalize_model_json(self._chat(messages))
+                    recipe = parse(raw_text)
+                except Exception as err:
+                    logger.error(f"[RecipeService] Ollama generation error (attempt {attempt + 1}): {err}")
+                    break
                 if recipe and recipe.ingredients and recipe.instructions:
-                    logger.info(
-                        f"[RecipeService] Successfully parsed recipe '{recipe.name}' with "
-                        f"{len(recipe.ingredients)} ingredients, {len(recipe.instructions)} steps, "
-                        f"{len(recipe.substitutions)} substitutions, {len(recipe.shopping_list)} shopping items."
-                    )
-                    return RecipeResponse(success=True, recipe=recipe, raw_text=raw_text)
-                else:
-                    logger.warning("[RecipeService] GGUF output could not be parsed into a complete recipe. Activating database fallback.")
-            except Exception as llm_err:
-                logger.error(f"[RecipeService] Llama GGUF generation error: {llm_err}", exc_info=True)
-                # Fall through to HF or database fallback
-
-        # 2b. Secondary Engine: Optimized Hugging Face Transformers Execution
-        elif self.model is not None and self.tokenizer is not None:
-            try:
-                text = self.tokenizer.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=True
-                )
-                model_inputs = self.tokenizer([text], return_tensors="pt").to(self.device)
-
-                logger.info(f"[RecipeService] Generating recipe with HF Transformers (max_new_tokens={max_tokens}, greedy do_sample=False)...")
-
-                with torch.no_grad():
-                    generated_ids = self.model.generate(
-                        **model_inputs,
-                        max_new_tokens=max_tokens,
-                        do_sample=False,
-                        repetition_penalty=1.1,
-                    )
-
-                generated_ids = [
-                    output_ids[len(input_ids):]
-                    for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
-                ]
-                raw_text = self.tokenizer.batch_decode(
-                    generated_ids, skip_special_tokens=True
-                )[0].strip()
-
-                logger.info(f"[RecipeService] Qwen generated {len(raw_text)} chars")
-
-                recipe = parse_recipe_text(
-                    raw_text,
-                    fallback_ingredients=request.ingredients,
-                    cuisine=request.preferences.cuisine,
-                    diet=request.preferences.diet,
-                    additional_ingredients=request.preferences.additionalIngredients,
-                    candidate_recipe=top_cand,
-                )
-
-                if recipe and recipe.ingredients and recipe.instructions:
-                    logger.info(
-                        f"[RecipeService] Successfully parsed recipe '{recipe.name}' with "
-                        f"{len(recipe.ingredients)} ingredients, {len(recipe.instructions)} steps, "
-                        f"{len(recipe.substitutions)} substitutions, {len(recipe.shopping_list)} shopping items."
-                    )
-                    return RecipeResponse(success=True, recipe=recipe, raw_text=raw_text)
-                else:
-                    logger.warning("[RecipeService] Model output could not be parsed into a complete recipe. Activating database fallback.")
-
-            except Exception as gen_err:
-                logger.error(f"[RecipeService] Qwen generation error: {gen_err}", exc_info=True)
-                # Fall through to candidate synthesis fallback
+                    gaps = missing(recipe)
+                    if not gaps:
+                        return RecipeResponse(success=True, recipe=recipe, raw_text=raw_text)
+                    last_ok = RecipeResponse(success=True, recipe=recipe, raw_text=raw_text)
+                    logger.warning(f"[RecipeService] Recipe ignored ingredients {gaps}; retrying.")
+                    messages = messages + [
+                        {"role": "assistant", "content": raw_text},
+                        {"role": "user", "content": (
+                            f"Your recipe never uses: {', '.join(gaps)}. Rewrite the complete JSON so these "
+                            "ingredients are core, listed in 'ingredients', and used in the instruction steps."
+                        )},
+                    ]
+            if last_ok:  # a model recipe missing one ingredient beats an unrelated database dish
+                return last_ok
+        else:
+            logger.warning("[RecipeService] Ollama unreachable or model missing; using database fallback.")
 
         # 3. Grounded Candidate Synthesis Fallback
         if top_cand:

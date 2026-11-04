@@ -31,7 +31,7 @@ export default function IngredientSelector({
       <div className="flex items-center justify-between">
         <div>
           <h4 className="text-sm font-bold text-stone-900">
-            Select Ingredient from 247 CNN Classes
+            Select an ingredient from 247 categories
           </h4>
           <p className="text-xs text-stone-500">
             Choose the correct produce or ingredient category identified in your pantry

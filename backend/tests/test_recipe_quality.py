@@ -357,7 +357,7 @@ class TestRecipeQualityAndConsistency(unittest.TestCase):
         """Tests that RecipeService system prompt enforces standard stovetop preparation over baking."""
         from app.services.recipe_service import RecipeService
 
-        service = RecipeService(load_weights=False)
+        service = RecipeService(use_llm=False)
         req = RecipeRequest(
             ingredients=["apple", "banana", "milk"],
             preferences=RecipePreferences(diet="Vegetarian", cuisine="Indian", cookingTime=20),

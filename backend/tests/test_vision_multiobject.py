@@ -503,7 +503,7 @@ class TestVisionServiceMultiObjectInference(unittest.TestCase):
 
 class TestRecipePromptInjection(unittest.TestCase):
     def test_prompt_includes_inventory_and_use_first(self):
-        service = RecipeService(load_weights=False)
+        service = RecipeService(use_llm=False)
 
         req = RecipeRequest(
             ingredients=["tomato", "potato", "spinach"],

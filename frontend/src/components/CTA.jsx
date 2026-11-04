@@ -40,7 +40,7 @@ export default function CTA() {
           </div>
 
           <p className="mt-6 text-xs text-stone-400">
-            Powered by DishGenie CNN Vision Model & Fast Local Inference
+            Powered by Local Vision AI & Fast On-Device Inference
           </p>
 
         </div>

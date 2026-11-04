@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -189,8 +190,12 @@ class RecipeDatabase:
 
                 name = clean_text(str(rec.get("TranslatedRecipeName", rec.get("name", "Untitled Recipe"))))
                 ing_raw = clean_text(str(rec.get("TranslatedIngredients", rec.get("ingredients_raw", ""))))
-                ing_clean = clean_text(str(rec.get("Cleaned-Ingredients", rec.get("ingredients_cleaned", ""))))
+                ing_clean = clean_text(str(rec.get("Cleaned-Ingredients", rec.get("ingredients_cleaned", "")))) or ing_raw
                 instructions = clean_text(str(rec.get("TranslatedInstructions", rec.get("instructions", ""))))
+                # some rows ship untranslated Hindi instructions: unusable for English recipes
+                if len(re.findall(r"[ऀ-ॿ]", instructions)) > len(instructions) * 0.1:
+                    skipped_count += 1
+                    continue
                 cuisine = clean_text(str(rec.get("Cuisine", rec.get("cuisine", "Indian"))))
                 image_url = clean_text(str(rec.get("image-url", rec.get("image_url", ""))))
 
@@ -210,6 +215,8 @@ class RecipeDatabase:
                 tokens = extract_ingredient_tokens(ing_clean)
                 tokens_json = json.dumps(tokens)
                 diet = classify_recipe_diet(ing_clean, name)
+                if re.search(r"non[\s-]*veg", str(rec.get("Diet", "")), re.I):
+                    diet = "Non-Vegetarian"
                 cuisine_category = normalize_cuisine(cuisine)
 
                 # Parameterized idempotent insert

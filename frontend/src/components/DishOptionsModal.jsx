@@ -9,7 +9,6 @@ import {
   Check,
   Compass,
 } from 'lucide-react'
-import { formatIngredientName, INGREDIENT_EMOJIS } from '../services/api'
 
 export default function DishOptionsModal({
   isOpen,
@@ -136,7 +135,7 @@ export default function DishOptionsModal({
         {/* Footer Actions */}
         <div className="px-6 sm:px-8 py-4 bg-stone-50 border-t border-stone-200/80 flex flex-col sm:flex-row items-center justify-between gap-3">
           <p className="text-xs text-stone-500 hidden sm:block">
-            DishGenie Qwen2.5 Generative AI • Stovetop & Pantry Optimized
+            DishGenie Local Generative AI • Stovetop & Pantry Optimized
           </p>
 
           <div className="flex items-center gap-3 w-full sm:w-auto justify-end">

@@ -416,7 +416,9 @@ class FreshnessAndExpiryEstimator:
             combined_score = max(combined_score, 0.85)
             combined_score = min(0.95, combined_score + 0.03)
 
-        freshness_score = float(np.clip(round(combined_score, 2), 0.35, 0.98))
+        # Shading/highlights on healthy produce look like blemishes; only a clearly spoiled surface may score low.
+        floor = 0.35 if blemish_ratio >= 0.30 else 0.65
+        freshness_score = float(np.clip(round(combined_score, 2), floor, 0.98))
         estimated_expiry_days = max(1, int(round(base_days * freshness_score)))
 
         # 7. Category Status Assignment

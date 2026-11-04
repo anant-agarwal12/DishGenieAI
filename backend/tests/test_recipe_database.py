@@ -320,7 +320,7 @@ A rich and aromatic North Indian stir-fry dish bursting with roasted spices and 
     def test_recipe_service_contract_with_database(self):
         from app.services.recipe_service import RecipeService
 
-        service = RecipeService(load_weights=False)
+        service = RecipeService(use_llm=False)
         req = RecipeRequest(
             ingredients=["tomato", "potato", "onion"],
             preferences=RecipePreferences(diet="Vegetarian", cuisine="Indian", cookingTime=30),
@@ -336,7 +336,7 @@ A rich and aromatic North Indian stir-fry dish bursting with roasted spices and 
     def test_recipe_service_candidate_options(self):
         from app.services.recipe_service import RecipeService
 
-        service = RecipeService(load_weights=False)
+        service = RecipeService(use_llm=False)
         req = RecipeRequest(
             ingredients=["karela"],
             preferences=RecipePreferences(diet="Vegetarian", cuisine="Indian"),

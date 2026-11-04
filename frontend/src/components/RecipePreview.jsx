@@ -158,7 +158,7 @@ export default function RecipePreview() {
                 <Sparkles className="w-3.5 h-3.5 text-orange-500" />
                 <span>Example recipe output synthesized by DishGenie's two-stage AI engine</span>
               </div>
-              <span className="font-medium text-stone-600 hidden sm:inline">Local Qwen2.5 & SQLite DB</span>
+              <span className="font-medium text-stone-600 hidden sm:inline">Local AI & Recipe Database</span>
             </div>
 
           </div>

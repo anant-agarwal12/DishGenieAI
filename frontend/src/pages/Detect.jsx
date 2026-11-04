@@ -9,13 +9,11 @@ import {
   AlertCircle,
   ArrowLeft,
   Check,
-  Edit2,
   RefreshCw,
   RotateCcw,
   Eye,
   EyeOff,
   Boxes,
-  Layers,
 } from 'lucide-react'
 import {
   predictIngredient,
@@ -28,7 +26,6 @@ import IngredientList from '../components/IngredientList'
 import IngredientSelector from '../components/IngredientSelector'
 import InventoryTable from '../components/InventoryTable'
 import RecipePreferences from '../components/RecipePreferences'
-import RecipeSummary from '../components/RecipeSummary'
 import RecipeRequestModal from '../components/RecipeRequestModal'
 import DishOptionsModal from '../components/DishOptionsModal'
 import LoadingState from '../components/LoadingState'
@@ -484,8 +481,15 @@ export default function Detect() {
     setError(null)
     setGenerationError(false)
 
-    const payload = buildRecipePayload()
-    setRecipeRequestPayload(payload)
+    // Show the selected ingredients + preferences for review before generating
+    setRecipeRequestPayload(buildRecipePayload())
+    setShowPayloadModal(true)
+  }
+
+  // Step A2: user accepted the review dialog -> fetch dish options
+  const proceedToDishOptions = async () => {
+    setShowPayloadModal(false)
+    const payload = recipeRequestPayload || buildRecipePayload()
     setIsLoadingCandidates(true)
 
     // Retrieve top 3 matching database candidates
@@ -697,11 +701,11 @@ export default function Detect() {
                 1. Image & Ingredient Scanner
               </h2>
               <p className="text-xs text-stone-500">
-                Capture or upload vegetable photos for CNN analysis
+                Capture or upload vegetable photos for AI analysis
               </p>
             </div>
             <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-orange-50 text-orange-700 border border-orange-200">
-              CNN Active
+              Vision AI Active
             </span>
           </div>
 
@@ -895,20 +899,14 @@ export default function Detect() {
                 <div className="flex items-center gap-2.5">
                   <span className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-orange-700 bg-orange-50 px-3 py-1.5 rounded-full border border-orange-200">
                     <Boxes className="w-3.5 h-3.5 text-orange-600" />
-                    Multi-Object Detection & Inventory
+                    Detected Ingredients
                   </span>
-                  {totalDetectedItems > 1 ? (
-                    <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">
-                      {totalDetectedItems} Items Isolated
-                    </span>
-                  ) : (
-                    <span className="text-xs font-bold text-stone-600 bg-stone-100 px-2.5 py-1 rounded-full">
-                      Single Item
-                    </span>
-                  )}
+                  <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">
+                    {totalDetectedItems} item{totalDetectedItems === 1 ? '' : 's'}
+                  </span>
                 </div>
 
-                {annotatedImage && (
+                {annotatedImage && detections.length > 0 && (
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
@@ -935,7 +933,7 @@ export default function Detect() {
               <div className="mt-6 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
                 {/* Visualizer Frame */}
                 <div className="lg:col-span-6 bg-stone-950 rounded-2xl overflow-hidden border border-stone-800 shadow-inner relative flex items-center justify-center min-h-[260px] max-h-[380px]">
-                  {annotatedImage && showAnnotated ? (
+                  {annotatedImage && detections.length > 0 && showAnnotated ? (
                     <img
                       src={annotatedImage}
                       alt="Annotated detection with bounding boxes"
@@ -948,78 +946,30 @@ export default function Detect() {
                       className="w-full h-full object-contain max-h-[380px]"
                     />
                   )}
-                  <div className="absolute bottom-2.5 left-2.5 right-2.5 flex items-center justify-between pointer-events-none">
-                    <span className="text-[11px] font-mono text-white/90 bg-black/60 backdrop-blur-xs px-2.5 py-1 rounded-md">
-                      {showAnnotated && annotatedImage ? 'Two-Stage Hybrid: Region Proposal + 247-Class Custom CNN' : 'Raw Input Photo'}
-                    </span>
-                    <span className="text-[11px] font-mono text-white/90 bg-black/60 backdrop-blur-xs px-2.5 py-1 rounded-md">
-                      {totalDetectedItems} crop{totalDetectedItems > 1 ? 's' : ''}
-                    </span>
-                  </div>
                 </div>
 
-                {/* Primary Prediction & Confidence Details */}
-                <div className="lg:col-span-6 flex flex-col justify-between space-y-4">
-                  <div className="p-5 rounded-2xl bg-amber-50/70 border border-amber-200 flex items-center justify-between gap-4">
-                    <div className="flex items-center gap-4">
-                      <div className="w-16 h-16 rounded-2xl bg-white border border-amber-200 flex items-center justify-center text-3xl shadow-xs shrink-0">
-                        {INGREDIENT_EMOJIS[prediction.name] || '🥗'}
-                      </div>
-                      <div>
-                        <span className="text-[11px] font-bold uppercase tracking-wider text-amber-700">
-                          Primary Detected Class
-                        </span>
-                        <h2 className="text-2xl font-black text-stone-900 leading-tight">
-                          {formatIngredientName(prediction.name)}
-                        </h2>
-                        <p className="text-xs text-stone-500 mt-0.5">
-                          247-Class Custom CNN
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex flex-col items-end">
-                      <span className="text-[10px] font-bold text-stone-400 uppercase">Confidence</span>
-                      <span className="text-2xl font-black font-mono text-orange-600">
-                        {(prediction.confidence * 100).toFixed(1)}%
-                      </span>
-                    </div>
+                {/* What was found */}
+                <div className="lg:col-span-6 flex flex-col gap-4">
+                  <div>
+                    <h2 className="text-lg font-extrabold text-stone-900">
+                      Found {inventory.length} ingredient{inventory.length === 1 ? '' : 's'} in your photo
+                    </h2>
+                    <p className="text-sm text-stone-500 mt-0.5">
+                      Check the list. Fix a count, remove a wrong item, or add one we missed.
+                    </p>
                   </div>
-
-                  {/* Top 3 Alternative Candidates */}
-                  {topPredictions && topPredictions.length > 1 && (
-                    <div className="bg-stone-50 border border-stone-200 rounded-2xl p-4">
-                      <h4 className="text-[11px] font-bold uppercase tracking-wider text-stone-500 mb-3">
-                        Model Ranked Candidates
-                      </h4>
-                      <div className="space-y-2.5">
-                        {topPredictions.slice(0, 3).map((cand, idx) => {
-                          const percent = (cand.confidence * 100).toFixed(1)
-                          return (
-                            <div key={cand.name} className="space-y-1">
-                              <div className="flex items-center justify-between text-xs font-semibold text-stone-700">
-                                <span className="flex items-center gap-2">
-                                  <span className="text-stone-400 font-mono text-[11px]">#{idx + 1}</span>
-                                  <span>{INGREDIENT_EMOJIS[cand.name] || '🥗'}</span>
-                                  <span>{formatIngredientName(cand.name)}</span>
-                                </span>
-                                <span className="font-mono text-stone-800">{percent}%</span>
-                              </div>
-                              <div className="w-full h-1.5 rounded-full bg-stone-200 overflow-hidden">
-                                <div
-                                  className={`h-full rounded-full transition-all duration-500 ${
-                                    idx === 0
-                                      ? 'bg-gradient-to-r from-orange-500 to-amber-500'
-                                      : 'bg-stone-400'
-                                  }`}
-                                  style={{ width: `${Math.max(parseFloat(percent), 3)}%` }}
-                                />
-                              </div>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  )}
+                  <ul className="flex flex-wrap gap-2.5">
+                    {inventory.map((item) => (
+                      <li
+                        key={item.ingredient}
+                        className="inline-flex items-center gap-2 pl-3 pr-3.5 py-2 rounded-2xl bg-stone-50 border border-stone-200 text-sm font-bold text-stone-800"
+                      >
+                        <span className="text-xl" aria-hidden="true">{INGREDIENT_EMOJIS[item.ingredient] || '🥗'}</span>
+                        <span>{formatIngredientName(item.ingredient)}</span>
+                        <span className="font-mono text-xs px-1.5 py-0.5 rounded-md bg-orange-100 text-orange-700">×{item.count}</span>
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               </div>
 
@@ -1041,7 +991,7 @@ export default function Detect() {
                       Confirm Inventory & Recipe Setup
                     </h3>
                     <p className="text-xs text-stone-500">
-                      Counts, freshness grading, and expiry days will be injected into Qwen2.5.
+                      Counts, freshness grading, and expiry days will be used by the recipe AI.
                     </p>
                   </div>
 
@@ -1054,15 +1004,6 @@ export default function Detect() {
                       >
                         <Check className="w-4 h-4" />
                         <span>✓ Confirm & Continue</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => setIsChanging(true)}
-                        className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-full text-xs font-semibold text-stone-700 bg-white hover:bg-stone-100 border border-stone-300 transition-colors cursor-pointer"
-                      >
-                        <Edit2 className="w-3.5 h-3.5 text-stone-500" />
-                        <span>✎ Correct Primary</span>
                       </button>
 
                       <button
@@ -1133,17 +1074,6 @@ export default function Detect() {
             isGenerating={isGeneratingRecipe}
             errors={preferenceErrors}
           />
-
-          {/* COMPACT RECIPE GENERATION SUMMARY */}
-          <RecipeSummary
-            ingredients={confirmedIngredients}
-            preferences={preferences}
-            onGenerate={handleGenerateRecipe}
-            onEditPreferences={() => {
-              preferencesRef.current?.scrollIntoView({ behavior: 'smooth' })
-            }}
-            isGenerating={isGeneratingRecipe}
-          />
         </div>
       )}
 
@@ -1205,7 +1135,7 @@ export default function Detect() {
             </div>
 
             <p className="text-[11px] text-stone-400">
-              Running locally on-device via Qwen2.5 model and SQLite database without cloud AI APIs.
+              Running locally on-device via local AI models and a recipe database without cloud AI APIs.
             </p>
           </div>
         </div>
@@ -1233,7 +1163,7 @@ export default function Detect() {
                 type="button"
                 onClick={() => {
                   setGenerationError(false)
-                  handleGenerateRecipe()
+                  proceedToDishOptions()
                 }}
                 className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 rounded-full text-xs font-bold text-white bg-gradient-to-r from-orange-500 to-amber-600 hover:from-orange-600 hover:to-amber-700 shadow-md shadow-orange-500/20 cursor-pointer"
               >
@@ -1263,7 +1193,9 @@ export default function Detect() {
       {showPayloadModal && (
         <RecipeRequestModal
           requestPayload={recipeRequestPayload}
+          isLoading={isLoadingCandidates}
           onClose={() => setShowPayloadModal(false)}
+          onAccept={proceedToDishOptions}
           onEdit={() => {
             setShowPayloadModal(false)
             if (preferencesRef.current) {

@@ -5,11 +5,7 @@ import {
   Plus,
   Minus,
   Trash2,
-  CheckCircle2,
-  Sparkles,
   Layers,
-  Leaf,
-  PlusCircle,
 } from 'lucide-react'
 import { INGREDIENT_EMOJIS, formatIngredientName } from '../services/api'
 import IngredientSelector from './IngredientSelector'

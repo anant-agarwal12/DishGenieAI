@@ -19,7 +19,6 @@ import {
   ShoppingBag,
   Heart,
 } from 'lucide-react'
-import { INGREDIENT_EMOJIS, formatIngredientName } from '../services/api'
 import {
   getRecipeById,
   toggleFavorite,
@@ -101,6 +100,7 @@ export default function Recipe() {
   const [checkedItems, setCheckedItems] = useState({})
   const [copied, setCopied] = useState(false)
   const [toast, setToast] = useState(null)
+  const [tab, setTab] = useState('steps')
 
   // Synchronize favorite status on external updates (e.g. cross-tab or history page)
   useEffect(() => {
@@ -247,479 +247,235 @@ export default function Recipe() {
     })
   }
 
+  const hasSubs = recipe?.substitutions?.length > 0
+  const hasShop = recipe?.shopping_list?.length > 0
+  const tabs = [
+    { id: 'steps', label: 'Steps', icon: BookOpen, count: recipe?.instructions?.length || 0 },
+    ...(hasShop ? [{ id: 'shopping', label: 'Shopping', icon: ShoppingBag, count: recipe.shopping_list.length }] : []),
+    ...(hasSubs ? [{ id: 'swaps', label: 'Swaps', icon: Sparkles, count: recipe.substitutions.length }] : []),
+  ]
+  const activeTab = tabs.some((t) => t.id === tab) ? tab : 'steps'
+  const chipCls = 'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/20 text-white text-xs font-bold'
+  const btnCls = 'inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold text-stone-700 bg-white border border-stone-300 hover:bg-stone-50 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-400'
+
   return (
-    <div className="print-page min-h-[85vh] py-8 sm:py-12 px-4 sm:px-6 lg:px-8 max-w-5xl mx-auto space-y-8">
-      
-      {/* 1. TOP HEADER & NAVIGATION */}
-      <div className="no-print flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-stone-200">
+    <div className="print-page py-6 sm:py-8 px-4 sm:px-6 lg:px-8 max-w-6xl mx-auto space-y-4">
+
+      {/* TOP BAR: back + actions */}
+      <div className="no-print flex flex-wrap items-center justify-between gap-3">
         <button
           onClick={handleModifyIngredients}
-          className="inline-flex items-center gap-2 text-sm font-semibold text-stone-600 hover:text-orange-600 transition-colors cursor-pointer self-start"
+          className="inline-flex items-center gap-2 text-sm font-semibold text-stone-600 hover:text-orange-600 transition-colors cursor-pointer"
         >
           <ArrowLeft className="w-4 h-4" />
-          <span>← Back to Ingredients</span>
+          <span>Ingredients</span>
         </button>
 
-        <div className="flex items-center gap-2.5 self-start sm:self-auto">
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-bold">
-            <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
-            <span>AI Generated Recipe</span>
-          </span>
-          <span className="text-xs text-stone-400 font-mono hidden md:inline">
-            Local Qwen2.5 & SQLite DB
-          </span>
-        </div>
-      </div>
-
-      {/* Page Title Label */}
-      <div className="no-print flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl sm:text-3xl font-extrabold text-stone-900 tracking-tight">
-            Your DishGenie Recipe
-          </h1>
-          <p className="text-xs sm:text-sm text-stone-500 mt-1">
-            Synthesized locally using verified ingredients and your culinary preferences.
-          </p>
-        </div>
-
-        {/* Header Action Buttons */}
         <div className="flex flex-wrap items-center gap-2">
-          {/* Favorite Toggle Button */}
           {recipePayload.savedId && (
             <button
               type="button"
               onClick={handleToggleFavorite}
-              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all shadow-2xs cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500 ${
-                isFavorite
-                  ? 'bg-rose-50 text-rose-600 border border-rose-200 hover:bg-rose-100'
-                  : 'bg-white text-stone-700 border border-stone-300 hover:bg-stone-50 hover:border-stone-400'
-              }`}
-              title={isFavorite ? 'Remove from Favorites' : 'Add to Favorites'}
+              className={`${btnCls} ${isFavorite ? '!bg-rose-50 !text-rose-600 !border-rose-200' : ''}`}
               aria-label={isFavorite ? 'Remove from Favorites' : 'Add to Favorites'}
             >
-              <Heart
-                className={`w-3.5 h-3.5 ${
-                  isFavorite ? 'fill-rose-500 text-rose-500' : 'text-stone-500'
-                }`}
-              />
+              <Heart className={`w-3.5 h-3.5 ${isFavorite ? 'fill-rose-500 text-rose-500' : 'text-stone-500'}`} />
               <span>{isFavorite ? 'Favorited' : 'Favorite'}</span>
             </button>
           )}
-
-          <button
-            type="button"
-            onClick={handleCopyRecipe}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold text-stone-700 bg-white border border-stone-300 hover:bg-stone-50 hover:border-stone-400 transition-colors shadow-2xs cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-400 focus-visible:ring-offset-1"
-          >
-            {copied ? (
-              <>
-                <Check className="w-3.5 h-3.5 text-emerald-600" />
-                <span className="text-emerald-700">Copied!</span>
-              </>
-            ) : (
-              <>
-                <Copy className="w-3.5 h-3.5 text-stone-500" />
-                <span>Copy</span>
-              </>
-            )}
+          <button type="button" onClick={handleCopyRecipe} className={btnCls}>
+            {copied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5 text-stone-500" />}
+            <span>{copied ? 'Copied' : 'Copy'}</span>
           </button>
-
-          <button
-            type="button"
-            onClick={handlePrint}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold text-stone-700 bg-white border border-stone-300 hover:bg-stone-50 hover:border-stone-400 transition-colors shadow-2xs cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-400 focus-visible:ring-offset-1"
-          >
+          <button type="button" onClick={handlePrint} className={btnCls}>
             <Printer className="w-3.5 h-3.5 text-stone-500" />
-            <span>Print Recipe</span>
+            <span>Print</span>
+          </button>
+          <button
+            type="button"
+            onClick={handleGenerateAnother}
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-extrabold text-white bg-gradient-to-r from-orange-500 to-amber-600 hover:from-orange-600 hover:to-amber-700 shadow-md shadow-orange-500/25 transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            <span>New recipe</span>
           </button>
         </div>
       </div>
 
-      {/* PRINT-ONLY BRAND & DOCUMENT HEADER */}
-      <div className="print-only pb-4 mb-6 border-b-2 border-stone-900">
+      {/* PRINT-ONLY BRAND HEADER */}
+      <div className="print-only pb-4 mb-4 border-b-2 border-stone-900">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-black tracking-tight text-stone-900">
-              Dish<span className="text-orange-600">Genie</span>
-            </h1>
-            <span className="text-xs text-stone-500 font-medium">| Smart Recipe Assistant</span>
-          </div>
-          <div className="text-right text-xs text-stone-500">
-            <p>Printed: {new Date().toLocaleDateString()}</p>
-          </div>
+          <h1 className="text-2xl font-black tracking-tight text-stone-900">
+            Dish<span className="text-orange-600">Genie</span>
+          </h1>
+          <p className="text-xs text-stone-500">Printed: {new Date().toLocaleDateString()}</p>
         </div>
       </div>
 
-      {/* 2. DETECTED & CONFIRMED INGREDIENTS */}
-      {confirmedIngredients && confirmedIngredients.length > 0 && (
-        <div className="bg-white rounded-3xl p-5 sm:p-6 border border-stone-200 shadow-xl shadow-stone-900/5 space-y-3">
-          <div className="flex items-center justify-between pb-3 border-b border-stone-100">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-stone-900 flex items-center gap-2">
-              <Check className="w-4 h-4 text-emerald-600" />
-              <span>Detected & Confirmed Ingredients</span>
-            </h3>
-            <span className="text-xs text-stone-500 font-mono">
-              {confirmedIngredients.length} item{confirmedIngredients.length !== 1 ? 's' : ''}
-            </span>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2 pt-1">
-            {confirmedIngredients.map((ing) => (
-              <span
-                key={ing}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50/70 border border-emerald-200 text-xs font-bold text-emerald-950 shadow-2xs"
-              >
-                <Check className="w-3.5 h-3.5 text-emerald-600" />
-                <span className="text-base">{INGREDIENT_EMOJIS[ing] || '🥗'}</span>
-                <span>{formatIngredientName(ing)}</span>
-              </span>
-            ))}
-            {preferences?.additionalIngredients && preferences.additionalIngredients.trim() && (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-stone-50 border border-stone-200 text-xs font-medium text-stone-700">
-                <span>+ Pantry: {preferences.additionalIngredients}</span>
-              </span>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* 3. STRUCTURED RECIPE VIEW OR FALLBACK */}
       {recipe ? (
-        <div className="space-y-8">
-          
-          {/* RECIPE HERO CARD */}
-          <div className="bg-white rounded-3xl border border-stone-200 shadow-xl shadow-stone-900/5 overflow-hidden">
-            <div className="bg-gradient-to-r from-orange-500 via-amber-500 to-orange-600 p-6 sm:p-10 text-white relative">
-              <div className="flex flex-wrap items-center gap-2 mb-3">
-                {recipePayload.selectedDish && (
-                  <span className="px-3 py-1 rounded-full bg-amber-400 text-stone-950 text-xs font-extrabold uppercase tracking-wider shadow-sm flex items-center gap-1.5">
-                    <Sparkles className="w-3.5 h-3.5" />
-                    <span>Style: {recipePayload.selectedDish}</span>
-                  </span>
-                )}
-                <span className="px-3 py-1 rounded-full bg-white/20 backdrop-blur-xs text-white text-xs font-bold uppercase tracking-wider">
-                  🍽 {preferences?.cuisine || 'Custom'} Cuisine
+        <>
+          {/* COMPACT HERO */}
+          <div className="rounded-3xl bg-gradient-to-r from-orange-500 via-amber-500 to-orange-600 px-6 py-5 sm:px-8 sm:py-6 text-white shadow-lg shadow-orange-500/15">
+            <h1 className="text-2xl sm:text-3xl font-black tracking-tight break-words">
+              {cleanText(recipe.name)}
+            </h1>
+            {recipe.description && recipe.description.trim() && (
+              <p className="mt-1.5 text-sm sm:text-base text-orange-50 max-w-3xl leading-snug line-clamp-2">
+                {cleanText(recipe.description)}
+              </p>
+            )}
+            <div className="mt-4 flex flex-wrap gap-2">
+              <span className={chipCls}><Clock className="w-3.5 h-3.5" />{preferences?.cookingTime || 30} min</span>
+              <span className={chipCls}><Flame className="w-3.5 h-3.5" />{preferences?.difficulty || 'Easy'}</span>
+              <span className={chipCls}><Users className="w-3.5 h-3.5" />{preferences?.servings || 2} serving{Number(preferences?.servings) === 1 ? '' : 's'}</span>
+              <span className={chipCls}><Utensils className="w-3.5 h-3.5" />{preferences?.cuisine || 'Indian'}</span>
+              <span className={chipCls}><ChefHat className="w-3.5 h-3.5" />{preferences?.diet || 'Vegetarian'}</span>
+              {recipePayload.selectedDish && (
+                <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-300 text-stone-900 text-xs font-extrabold">
+                  <Sparkles className="w-3.5 h-3.5" />Style: {recipePayload.selectedDish}
                 </span>
-                <span className="px-3 py-1 rounded-full bg-white/20 backdrop-blur-xs text-white text-xs font-bold uppercase tracking-wider">
-                  🥗 {preferences?.diet || 'Vegetarian'}
-                </span>
-              </div>
-
-              <h2 className="text-2xl sm:text-4xl lg:text-5xl font-black tracking-tight text-white drop-shadow-xs flex items-center gap-2 sm:gap-3 break-words">
-                <span>🍲</span>
-                <span>{cleanText(recipe.name)}</span>
-              </h2>
-
-              {recipe.description && recipe.description.trim() && (
-                <p className="mt-3 text-base sm:text-lg text-orange-50 max-w-3xl leading-relaxed">
-                  {cleanText(recipe.description)}
-                </p>
               )}
-
-              {/* 5 METADATA CARDS */}
-              <div className="mt-8 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-                {/* 1. Cooking Time */}
-                <div className="bg-white/15 backdrop-blur-md rounded-2xl p-3 text-white border border-white/20">
-                  <div className="flex items-center gap-1.5 text-xs text-orange-100 font-semibold mb-1">
-                    <Clock className="w-3.5 h-3.5" />
-                    <span>Cooking Time</span>
-                  </div>
-                  <p className="text-lg font-black">{preferences?.cookingTime || 30} min</p>
-                </div>
-
-                {/* 2. Difficulty */}
-                <div className="bg-white/15 backdrop-blur-md rounded-2xl p-3 text-white border border-white/20">
-                  <div className="flex items-center gap-1.5 text-xs text-orange-100 font-semibold mb-1">
-                    <Flame className="w-3.5 h-3.5" />
-                    <span>Difficulty</span>
-                  </div>
-                  <p className="text-lg font-black">{preferences?.difficulty || 'Easy'}</p>
-                </div>
-
-                {/* 3. Servings */}
-                <div className="bg-white/15 backdrop-blur-md rounded-2xl p-3 text-white border border-white/20">
-                  <div className="flex items-center gap-1.5 text-xs text-orange-100 font-semibold mb-1">
-                    <Users className="w-3.5 h-3.5" />
-                    <span>Servings</span>
-                  </div>
-                  <p className="text-lg font-black">{preferences?.servings || 2}</p>
-                </div>
-
-                {/* 4. Cuisine */}
-                <div className="bg-white/15 backdrop-blur-md rounded-2xl p-3 text-white border border-white/20">
-                  <div className="flex items-center gap-1.5 text-xs text-orange-100 font-semibold mb-1">
-                    <Utensils className="w-3.5 h-3.5" />
-                    <span>Cuisine</span>
-                  </div>
-                  <p className="text-lg font-black truncate">{preferences?.cuisine || 'Indian'}</p>
-                </div>
-
-                {/* 5. Diet */}
-                <div className="col-span-2 sm:col-span-1 bg-white/15 backdrop-blur-md rounded-2xl p-3 text-white border border-white/20">
-                  <div className="flex items-center gap-1.5 text-xs text-orange-100 font-semibold mb-1">
-                    <ChefHat className="w-3.5 h-3.5" />
-                    <span>Diet</span>
-                  </div>
-                  <p className="text-lg font-black truncate">{preferences?.diet || 'Vegetarian'}</p>
-                </div>
-              </div>
             </div>
           </div>
 
-          {/* DYNAMIC TWO-COLUMN OR SINGLE-COLUMN LAYOUT */}
-          {(() => {
-            const hasSubstitutions = recipe.substitutions && recipe.substitutions.length > 0
-            const hasShoppingList = recipe.shopping_list && recipe.shopping_list.length > 0
-            const hasRightColumn = hasSubstitutions || hasShoppingList
+          {/* BODY: ingredients | tabbed scroll panel (fixed height on desktop, content scrolls inside) */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 lg:items-start print:block">
 
-            return (
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-                
-                {/* LEFT COLUMN: INGREDIENTS & INSTRUCTIONS */}
-                <div className={`${hasRightColumn ? 'lg:col-span-7' : 'lg:col-span-12'} space-y-8`}>
-                  
-                  {/* INGREDIENTS SECTION */}
-                  <div className="bg-white rounded-3xl p-6 sm:p-8 border border-stone-200 shadow-xl shadow-stone-900/5 space-y-5">
-                    <div className="flex items-center justify-between pb-3 border-b border-stone-100">
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-8 h-8 rounded-xl bg-orange-100 text-orange-600 flex items-center justify-center font-bold">
-                          <ChefHat className="w-4 h-4" />
-                        </div>
-                        <h3 className="text-lg font-extrabold text-stone-900">
-                          Ingredients
-                        </h3>
-                      </div>
-                      <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-stone-100 text-stone-600">
-                        {recipe.ingredients ? recipe.ingredients.length : 0} items
-                      </span>
-                    </div>
+            {/* INGREDIENTS */}
+            <section className="lg:col-span-4 flex flex-col min-h-0 max-h-[50vh] lg:max-h-[calc(100vh-19rem)] bg-white rounded-3xl border border-stone-200 shadow-sm print:max-h-none">
+              <header className="flex items-center justify-between px-5 py-3.5 border-b border-stone-100 shrink-0">
+                <h2 className="flex items-center gap-2 text-base font-extrabold text-stone-900">
+                  <span className="w-7 h-7 rounded-lg bg-orange-100 text-orange-600 flex items-center justify-center"><ChefHat className="w-4 h-4" /></span>
+                  Ingredients
+                </h2>
+                <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-stone-100 text-stone-600">
+                  {recipe.ingredients?.length || 0}
+                </span>
+              </header>
+              <ul className="flex-1 overflow-y-auto px-5 py-3 space-y-1 print:overflow-visible">
+                {recipe.ingredients?.length > 0 ? (
+                  recipe.ingredients.map((item, idx) => (
+                    <li key={idx} className="flex items-start gap-3 py-2 border-b border-stone-100 last:border-0 text-sm font-medium text-stone-800">
+                      <span className="mt-1.5 w-2 h-2 rounded-full bg-orange-500 shrink-0" />
+                      <span className="break-words">{cleanText(item)}</span>
+                    </li>
+                  ))
+                ) : (
+                  <li className="text-sm text-stone-500 italic py-2">No ingredients specified.</li>
+                )}
+              </ul>
+            </section>
 
-                    {recipe.ingredients && recipe.ingredients.length > 0 ? (
-                      <div className={`grid grid-cols-1 ${hasRightColumn ? 'sm:grid-cols-2' : 'sm:grid-cols-3'} gap-3`}>
-                        {recipe.ingredients.map((item, idx) => (
-                          <div
-                            key={idx}
-                            className="flex items-center gap-3 p-3.5 rounded-2xl bg-stone-50 border border-stone-200/80 hover:border-orange-200 transition-colors"
-                          >
-                            <span className="w-2.5 h-2.5 rounded-full bg-orange-500 shrink-0"></span>
-                            <div className="flex-1 min-w-0">
-                              <p className="text-sm font-bold text-stone-800 break-words">
-                                {cleanText(item)}
-                              </p>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="text-sm text-stone-500 italic">No ingredients specified.</p>
-                    )}
-                  </div>
+            {/* TABBED PANEL */}
+            <section className="lg:col-span-8 flex flex-col min-h-0 max-h-[75vh] lg:max-h-[calc(100vh-19rem)] bg-white rounded-3xl border border-stone-200 shadow-sm print:max-h-none print:mt-6">
+              <div role="tablist" aria-label="Recipe sections" className="no-print flex gap-1 px-3 pt-3 border-b border-stone-100 shrink-0">
+                {tabs.map(({ id, label, icon: Icon, count }) => (
+                  <button
+                    key={id}
+                    role="tab"
+                    id={`tab-${id}`}
+                    aria-selected={activeTab === id}
+                    aria-controls={`panel-${id}`}
+                    type="button"
+                    onClick={() => setTab(id)}
+                    className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-t-xl text-sm font-bold border-b-2 -mb-px transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400 ${
+                      activeTab === id
+                        ? 'border-orange-500 text-orange-700 bg-orange-50/60'
+                        : 'border-transparent text-stone-500 hover:text-stone-800'
+                    }`}
+                  >
+                    <Icon className="w-4 h-4" aria-hidden="true" />
+                    {label}
+                    <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded-full bg-stone-100 text-stone-600">{count}</span>
+                  </button>
+                ))}
+              </div>
 
-                  {/* COOKING INSTRUCTIONS SECTION */}
-                  <div className="bg-white rounded-3xl p-6 sm:p-8 border border-stone-200 shadow-xl shadow-stone-900/5 space-y-6">
-                    <div className="flex items-center justify-between pb-3 border-b border-stone-100">
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center font-bold">
-                          <BookOpen className="w-4 h-4" />
-                        </div>
-                        <h3 className="text-lg font-extrabold text-stone-900">
-                          Cooking Instructions
-                        </h3>
-                      </div>
-                      <span className="text-xs text-stone-400 font-mono">
-                        Step-by-step
-                      </span>
-                    </div>
-
-                    {recipe.instructions && recipe.instructions.length > 0 ? (
-                      <div className="space-y-4">
-                        {recipe.instructions.map((step, idx) => (
-                          <div
-                            key={idx}
-                            className="flex items-start gap-4 p-4 rounded-2xl bg-stone-50 border border-stone-200/80 hover:bg-stone-50/90 transition-colors"
-                          >
-                            <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-orange-500 to-amber-600 text-white font-mono text-sm font-black flex items-center justify-center shrink-0 shadow-xs">
-                              {String(idx + 1).padStart(2, '0')}
-                            </span>
-                            <div className="flex-1 pt-1">
-                              <p className="text-sm sm:text-base text-stone-800 leading-relaxed font-normal">
-                                {cleanText(step)}
-                              </p>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="text-sm text-stone-500 italic">No cooking instructions provided.</p>
-                    )}
-                  </div>
-
+              <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 print:overflow-visible">
+                {/* STEPS */}
+                <div id="panel-steps" role="tabpanel" aria-labelledby="tab-steps" className={activeTab === 'steps' ? '' : 'hidden print:block'}>
+                  {recipe.instructions?.length > 0 ? (
+                    <ol className="space-y-3">
+                      {recipe.instructions.map((step, idx) => (
+                        <li key={idx} className="flex items-start gap-3.5">
+                          <span className="w-8 h-8 rounded-lg bg-gradient-to-br from-orange-500 to-amber-600 text-white font-mono text-xs font-black flex items-center justify-center shrink-0">
+                            {idx + 1}
+                          </span>
+                          <p className="pt-1 text-sm sm:text-[15px] text-stone-800 leading-relaxed">{cleanText(step)}</p>
+                        </li>
+                      ))}
+                    </ol>
+                  ) : (
+                    <p className="text-sm text-stone-500 italic">No cooking instructions provided.</p>
+                  )}
                 </div>
 
-                {/* RIGHT COLUMN: SUBSTITUTIONS & SHOPPING LIST (Hidden if neither is present) */}
-                {hasRightColumn && (
-                  <div className="lg:col-span-5 space-y-8">
-                    
-                    {/* POSSIBLE SUBSTITUTIONS SECTION (Hidden if empty) */}
-                    {hasSubstitutions && (
-                      <div className="bg-white rounded-3xl p-6 sm:p-8 border border-stone-200 shadow-xl shadow-stone-900/5 space-y-5">
-                        <div className="flex items-center justify-between pb-3 border-b border-stone-100">
-                          <div className="flex items-center gap-2.5">
-                            <div className="w-8 h-8 rounded-xl bg-amber-50 text-amber-600 border border-amber-200 flex items-center justify-center font-bold">
-                              <Sparkles className="w-4 h-4" />
-                            </div>
-                            <h3 className="text-base font-extrabold text-stone-900">
-                              Possible Substitutions
-                            </h3>
-                          </div>
-                        </div>
-
-                        <div className="space-y-3">
-                          {recipe.substitutions.map((sub, idx) => (
-                            <div
-                              key={idx}
-                              className="p-3.5 rounded-2xl bg-amber-50/70 border border-amber-200/80 text-xs text-amber-950 space-y-1.5"
-                            >
-                              <div className="flex items-center justify-between font-bold text-amber-900">
-                                <span>{cleanText(sub.ingredient)}</span>
-                                <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-800">
-                                  Swap
-                                </span>
-                              </div>
-                              <div className="flex items-center gap-1.5 text-stone-700">
-                                <span className="text-amber-500 font-bold">↓</span>
-                                <span className="font-semibold text-stone-900">{cleanText(sub.replacement)}</span>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* SHOPPING LIST SECTION (Hidden if empty) */}
-                    {hasShoppingList && (
-                      <div className="bg-white rounded-3xl p-6 sm:p-8 border border-stone-200 shadow-xl shadow-stone-900/5 space-y-5">
-                        <div className="flex items-center justify-between pb-3 border-b border-stone-100">
-                          <div className="flex items-center gap-2.5">
-                            <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 border border-emerald-200 flex items-center justify-center font-bold">
-                              <ShoppingBag className="w-4 h-4" />
-                            </div>
-                            <h3 className="text-base font-extrabold text-stone-900">
-                              Shopping List
-                            </h3>
-                          </div>
-
-                          {/* Clear completed button */}
-                          {Object.values(checkedItems).some(Boolean) && (
+                {/* SHOPPING */}
+                {hasShop && (
+                  <div id="panel-shopping" role="tabpanel" aria-labelledby="tab-shopping" className={activeTab === 'shopping' ? '' : 'hidden print:block print:mt-6'}>
+                    <div className="flex items-center justify-between mb-2">
+                      <h3 className="hidden print:block text-base font-extrabold text-stone-900">Shopping List</h3>
+                      {Object.values(checkedItems).some(Boolean) && (
+                        <button type="button" onClick={handleClearCompleted} className="no-print ml-auto text-xs font-semibold text-stone-500 hover:text-stone-800 underline underline-offset-2 cursor-pointer">
+                          Clear completed
+                        </button>
+                      )}
+                    </div>
+                    <ul className="grid sm:grid-cols-2 gap-2">
+                      {recipe.shopping_list.map((item, idx) => {
+                        const isChecked = !!checkedItems[idx]
+                        return (
+                          <li key={idx}>
                             <button
                               type="button"
-                              onClick={handleClearCompleted}
-                              className="no-print text-xs font-semibold text-stone-500 hover:text-stone-800 transition-colors underline underline-offset-2 cursor-pointer"
+                              onClick={() => toggleShoppingItem(idx)}
+                              aria-pressed={isChecked}
+                              className={`w-full flex items-center gap-3 p-3 rounded-xl border text-left transition-colors cursor-pointer ${
+                                isChecked ? 'bg-emerald-50/50 border-emerald-200' : 'bg-stone-50 border-stone-200 hover:border-emerald-300'
+                              }`}
                             >
-                              Clear completed
+                              {isChecked ? <CheckSquare className="w-5 h-5 text-emerald-600 shrink-0" /> : <Square className="w-5 h-5 text-stone-300 shrink-0" />}
+                              <span className={`text-sm font-medium ${isChecked ? 'line-through text-stone-400' : 'text-stone-800'}`}>{cleanText(item)}</span>
                             </button>
-                          )}
-                        </div>
-
-                        <div className="space-y-2">
-                          {recipe.shopping_list.map((item, idx) => {
-                            const isChecked = !!checkedItems[idx]
-                            return (
-                              <div
-                                key={idx}
-                                onClick={() => toggleShoppingItem(idx)}
-                                className={`flex items-center gap-3 p-3 rounded-2xl border transition-all cursor-pointer ${
-                                  isChecked
-                                    ? 'bg-emerald-50/50 border-emerald-200 text-stone-400'
-                                    : 'bg-stone-50 border-stone-200 hover:border-emerald-300 text-stone-800'
-                                }`}
-                              >
-                                <button
-                                  type="button"
-                                  className="text-emerald-600 shrink-0"
-                                  aria-label={isChecked ? 'Uncheck item' : 'Check item'}
-                                >
-                                  {isChecked ? (
-                                    <CheckSquare className="w-5 h-5 text-emerald-600" />
-                                  ) : (
-                                    <Square className="w-5 h-5 text-stone-300" />
-                                  )}
-                                </button>
-                                <span
-                                  className={`text-xs sm:text-sm font-medium select-none ${
-                                    isChecked ? 'line-through text-stone-400' : 'text-stone-800'
-                                  }`}
-                                >
-                                  {cleanText(item)}
-                                </span>
-                              </div>
-                            )
-                          })}
-                        </div>
-                      </div>
-                    )}
-
+                          </li>
+                        )
+                      })}
+                    </ul>
                   </div>
                 )}
 
+                {/* SWAPS */}
+                {hasSubs && (
+                  <div id="panel-swaps" role="tabpanel" aria-labelledby="tab-swaps" className={activeTab === 'swaps' ? '' : 'hidden print:block print:mt-6'}>
+                    <h3 className="hidden print:block text-base font-extrabold text-stone-900 mb-2">Possible Substitutions</h3>
+                    <ul className="grid sm:grid-cols-2 gap-3">
+                      {recipe.substitutions.map((sub, idx) => (
+                        <li key={idx} className="p-4 rounded-xl bg-amber-50/70 border border-amber-200/80 text-sm">
+                          <p className="font-bold text-amber-900">{cleanText(sub.ingredient)}</p>
+                          <p className="mt-1 text-stone-800"><span className="text-amber-500 font-bold">→ </span>{cleanText(sub.replacement)}</p>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </div>
-            )
-          })()}
-        </div>
+            </section>
+          </div>
+        </>
       ) : (
-        /* RAW MODEL FALLBACK (If recipe == null but raw_text exists) */
-        <div className="bg-white rounded-3xl p-6 sm:p-10 border border-stone-200 shadow-xl shadow-stone-900/5 space-y-6">
-          <div className="flex items-center gap-3 pb-4 border-b border-stone-100">
+        /* Raw model text fallback when no structured recipe exists */
+        <div className="bg-white rounded-3xl p-6 sm:p-8 border border-stone-200 shadow-sm space-y-4">
+          <div className="flex items-center gap-3 pb-3 border-b border-stone-100">
             <div className="w-10 h-10 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-600">
               <AlertCircle className="w-5 h-5" />
             </div>
-            <div>
-              <h2 className="text-xl font-extrabold text-stone-900">
-                Generated Recipe
-              </h2>
-              <p className="text-xs text-stone-500">
-                Direct narrative output from the local Qwen2.5 model
-              </p>
-            </div>
+            <h2 className="text-xl font-extrabold text-stone-900">Generated Recipe</h2>
           </div>
-
-          <div className="p-6 rounded-2xl bg-stone-50 border border-stone-200 font-sans text-sm sm:text-base text-stone-800 leading-relaxed whitespace-pre-wrap">
+          <div className="p-5 rounded-2xl bg-stone-50 border border-stone-200 text-sm sm:text-base text-stone-800 leading-relaxed whitespace-pre-wrap">
             {raw_text || 'No recipe text generated.'}
           </div>
         </div>
       )}
-
-      {/* 4. BOTTOM ACTION BUTTONS */}
-      <div className="no-print pt-6 border-t border-stone-200 flex flex-col sm:flex-row items-center justify-between gap-4">
-        <button
-          type="button"
-          onClick={handleModifyIngredients}
-          className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-2xl text-xs sm:text-sm font-bold text-stone-700 bg-white border border-stone-300 hover:bg-stone-50 hover:border-stone-400 transition-all shadow-xs cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-400 focus-visible:ring-offset-2"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          <span>← Modify Ingredients</span>
-        </button>
-
-        <div className="w-full sm:w-auto flex flex-col sm:flex-row items-center gap-3">
-          <button
-            type="button"
-            onClick={handlePrint}
-            className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-2xl text-xs sm:text-sm font-bold text-stone-700 bg-white border border-stone-300 hover:bg-stone-50 transition-all shadow-xs cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-400 focus-visible:ring-offset-2"
-          >
-            <Printer className="w-4 h-4" />
-            <span>Print Recipe</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={handleGenerateAnother}
-            className="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 px-8 py-3.5 rounded-full text-xs sm:text-sm font-extrabold text-white bg-gradient-to-r from-orange-500 to-amber-600 hover:from-orange-600 hover:to-amber-700 shadow-md shadow-orange-500/25 hover:shadow-orange-500/35 transition-all hover:-translate-y-0.5 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2"
-          >
-            <RotateCcw className="w-4 h-4" />
-            <span>↻ Generate Another Recipe</span>
-          </button>
-        </div>
-      </div>
 
       {toast && (
         <Toast

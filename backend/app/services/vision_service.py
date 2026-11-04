@@ -8,6 +8,8 @@ import numpy as np
 import tensorflow as tf
 from PIL import Image, UnidentifiedImageError
 
+from app.services.vlm_detector import identify_ingredients
+
 try:
     from app.services.freshness_estimator import FreshnessAndExpiryEstimator, get_freshness_estimator
     from app.services.item_segmenter import ItemSegmenter, calculate_iou, get_item_segmenter
@@ -101,6 +103,13 @@ class VisionService:
             raise RuntimeError(
                 f"[VisionService] Failed to load CNN model from {self.model_path}: {e}"
             ) from e
+
+    def _status(self, expiry_days: int, name: str) -> str:
+        """Use First only when truly close to expiry; otherwise relative to the item's own shelf life (a 7-day tomato at 5 days is Fresh)."""
+        if expiry_days <= 3:
+            return "Use First"
+        base = self.freshness_estimator.get_base_shelf_life(name)
+        return "Fresh" if expiry_days > 7 or expiry_days >= 0.7 * base else "Medium"
 
     @property
     def is_available(self) -> bool:
@@ -331,7 +340,7 @@ class VisionService:
 
                 freshness = self.freshness_estimator.analyze_crop(crop, assigned_name)
                 exp_days = freshness["estimated_expiry_days"]
-                det_status = "Use First" if exp_days <= 3 else ("Medium" if exp_days <= 7 else "Fresh")
+                det_status = self._status(exp_days, assigned_name)
                 detections.append({
                     "ingredient": assigned_name,
                     "confidence": assigned_conf,
@@ -346,7 +355,7 @@ class VisionService:
             logger.info(f"[VisionService] Single item or pile region; using full-image detection for '{anchor_class}'.")
             freshness = self.freshness_estimator.analyze_crop(image_rgb, anchor_class)
             exp_days = freshness["estimated_expiry_days"]
-            det_status = "Use First" if exp_days <= 3 else ("Medium" if exp_days <= 7 else "Fresh")
+            det_status = self._status(exp_days, anchor_class)
             detections.append({
                 "ingredient": anchor_class,
                 "confidence": anchor_confidence,
@@ -401,8 +410,8 @@ class VisionService:
         # (e.g. dense bag of carrots with 6-8 carrots), NEVER when different items are present!
         if is_pile and len(distinct_classes) == 1:
             pile_count = min(12, max(len(detections), peak_count))
-            min_exp = min(d["expiry_days"] for d in detections)
-            status = "Use First" if min_exp <= 3 else ("Medium" if min_exp <= 7 else "Fresh")
+            min_exp = sorted(d["expiry_days"] for d in detections)[len(detections) // 2]
+            status = self._status(min_exp, anchor_class)
             ingredient_map[anchor_class] = {
                 "ingredient": anchor_class,
                 "count": pile_count,
@@ -421,19 +430,54 @@ class VisionService:
                         "status": det["status"],
                     }
                 ingredient_map[ing]["count"] += 1
-                if det["expiry_days"] < ingredient_map[ing]["min_expiry_days"]:
-                    ingredient_map[ing]["min_expiry_days"] = det["expiry_days"]
+                ingredient_map[ing].setdefault("_exp", []).append(det["expiry_days"])
 
             for ing, info in ingredient_map.items():
-                if info["min_expiry_days"] <= 3:
-                    info["status"] = "Use First"
-                elif info["min_expiry_days"] <= 7:
-                    info["status"] = "Medium"
-                else:
-                    info["status"] = "Fresh"
+                # median, not min: one shadowed crop must not mark every item of that class "Use First"
+                exps = sorted(info.pop("_exp", [info["min_expiry_days"]]))
+                info["min_expiry_days"] = exps[len(exps) // 2]
+                info["status"] = self._status(info["min_expiry_days"], ing)
 
         inventory = list(ingredient_map.values())
         total_items_detected = sum(item["count"] for item in inventory)
+
+        # 6b. Vision-LLM override: the CNN misreads ordinary photos, so the LLM decides WHICH ingredients
+        # are present. CNN-derived boxes, counts and freshness are kept only for classes the LLM confirms.
+        if isinstance(image_input, bytes):
+            raw_bytes = image_input
+        else:
+            _buf = io.BytesIO()
+            rgb_img.save(_buf, format="JPEG", quality=90)
+            raw_bytes = _buf.getvalue()
+        vlm_items = identify_ingredients(raw_bytes, self.class_names)
+        if vlm_items:
+            cnn_inv = {i["ingredient"]: i for i in inventory}
+            cnn_conf = {c["name"]: float(c["confidence"]) for c in full_top_candidates}
+            for d in detections:
+                cnn_conf[d["ingredient"]] = max(cnn_conf.get(d["ingredient"], 0.0), float(d["confidence"]))
+            vlm_names = [i["name"] for i in vlm_items]
+
+            inventory = []
+            for it in vlm_items:
+                name = it["name"]
+                count = it["count"]  # focused, per-item count from the vision LLM
+                if name in cnn_inv:
+                    exp = cnn_inv[name]["min_expiry_days"]
+                else:
+                    exp = self.freshness_estimator.get_base_shelf_life(name)
+                inventory.append({
+                    "ingredient": name,
+                    "count": count,
+                    "min_expiry_days": exp,
+                    "status": self._status(exp, name),
+                })
+            total_items_detected = sum(i["count"] for i in inventory)
+            detections = []  # CNN boxes are unreliable here and would contradict the verified counts; show the plain photo
+
+            top_predictions = [
+                {"name": n, "confidence": round(max(cnn_conf.get(n, 0.0), 0.85), 4)} for n in vlm_names[:top_k]
+            ]
+            primary_prediction = dict(top_predictions[0])
 
         # 7. Generate annotated visualization image
         annotated_rgb = self.segmenter.annotate_image(image_rgb, detections)
